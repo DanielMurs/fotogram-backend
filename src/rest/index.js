@@ -50,17 +50,22 @@ const db = firebase.firestore()
 
 //firebase admin
 const admin = require('firebase-admin');
-const credenciales = require('./../FIrebaseDB/credenciales.json');
+const fireCredenciales = require('./../FIrebaseDB/credenciales.json');
 admin.initializeApp({
-    credential: admin.credential.cert(credenciales),
+    credential: admin.credential.cert(fireCredenciales),
 })
-
 const authAdmin = admin.auth();
+
+//Cloudinary
+
+const cloudinary = require('cloudinary').v2;
+const cloudCredenciales = require('./../cloudinary/index');
+
+cloudinary.config(cloudCredenciales);
 
 
 
 // MIDDLEWARES
-
 
 // middleware para validacion de email y contraseña
 const userValidator = (req,res,next) => {
@@ -216,20 +221,23 @@ router.post('/api/uploadfile', verifytoken, uploadPicture.single('file'), async 
         uid: uid
     }
 
-    //newPicture es el documento de referencia a la nueva imagen que se guardara en firestore
-    const pictureURL =  url + `/pictures/${fileDate.getTime()}.${req.file.mimetype.split('/')[1]}`;
-    const pictureID = fileDate.getTime().toString()
+    // guardar imagen en cloudinary
+    // const pictureURL =  url + `/pictures/${fileDate.getTime()}.${req.file.mimetype.split('/')[1]}`;
+    
+    const result = await cloudinary.uploader.upload(req.file.path);
+
+    // newPicture es el documento de referencia a la nueva imagen que se guardara en firestore
 
     const newPicture = {
-        url: pictureURL,
-        id: pictureID,
+        url: result.url,
+        id: result.public_id,
         user: user,
         date: fileDate,
         likeds: {}  
     }
 
     // guardar newPicture en firestore
-    await db.collection('pictures').doc(pictureID).set(newPicture)
+    await db.collection('pictures').doc(result.public_id).set(newPicture)
     .then(data => res.json(new ResponseMessage(200, 'ok', true)))
     .catch(err => res.status(400).json(err))
     }    
@@ -249,14 +257,17 @@ router.patch('/api/updatefile', verifytoken, uploadUser.single('file'), async (r
         // id y foto antigua del usuario que actualizó su foto
         const { uid, picture } = req.user
 
+        // subir foto a cloudinary
+        const result = await cloudinary.uploader.upload(req.file.path);
+
 
         //ubicacion de la nueva foto el el servidor
-        const pictureURL = url + `/user_photo/${fileDate.getTime()}.${req.file.mimetype.split('/')[1]}`;
+        //const pictureURL = url + `/user_photo/${fileDate.getTime()}.${req.file.mimetype.split('/')[1]}`;
 
 
         //cambiar photoURL en firebase Auth
         await authAdmin.updateUser(uid, {
-            photoURL: pictureURL
+            photoURL: result.url
         })
         .catch(error => {
             res.status(400).json(new ResponseMessage(400, 'bad_request', false, error
@@ -264,16 +275,14 @@ router.patch('/api/updatefile', verifytoken, uploadUser.single('file'), async (r
 
         // si la foto antigua no es default, esta se eliminará
         if (!picture.includes('default')) {
-            fs.unlink( path.join(__dirname, `../storage/user_photo/${picture.split('/')[picture.split('/').length -1]}` ), () => {
-                return
-            });
+            const del = await cloudinary.uploader.destroy(picture.split('/')[picture.split('/').length -1])
         }
 
         // cambiar url de la propiedad "photoURL" del usuario en firestore
         const userRef = db.collection('users').doc(uid)
 
         await userRef.update({
-            photoURL: pictureURL
+            photoURL: result.url
         })
         .catch(error => res.status(400).json(new ResponseMessage(400, 'bad_request', false, error)))
 
@@ -294,7 +303,7 @@ router.patch('/api/updatefile', verifytoken, uploadUser.single('file'), async (r
             collection.forEach((doc) => {
                 const docData = doc.data();
                 const docRef = imagesRef.doc(docData.id);
-                docData.user.photoURL = pictureURL;
+                docData.user.photoURL = result.url;
                 batch.update(docRef,docData);
             })
 
